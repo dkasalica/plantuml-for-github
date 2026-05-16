@@ -6,6 +6,17 @@
   "author": "Arnaud Roques",
   "homepage_url": "https://github.com/plantuml/plantuml",
 
+#if FIREFOX
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "plantuml-for-github@plantuml.com",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
+    }
+  },
+#endif
 
   "icons": {
     "16": "icons/icon16.png",
@@ -32,7 +43,18 @@
       "resources": [
         "renderer.html",
         "renderer.js",
+#if CHROME
         "vendor/plantuml.js",
+#endif
+#if FIREFOX
+        "vendor/plantuml.0.js",
+        "vendor/plantuml.1.js",
+        "vendor/plantuml.2.js",
+        "vendor/plantuml.3.js",
+        "vendor/plantuml.4.js",
+        "vendor/plantuml.5.js",
+        "vendor/plantuml.6.js",
+#endif
         "vendor/viz-global.js"
       ],
       "matches": ["https://github.com/*"]
