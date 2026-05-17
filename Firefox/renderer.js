@@ -38,6 +38,16 @@ window.addEventListener('message', (event) => {
   if (!data || typeof data !== 'object') {
     return;
   }
+  if (data.type === 'PLANTUML_SET_MODE') {
+    // Toggle modal layout mode: lets the SVG keep its intrinsic size and
+    // makes the renderer body scroll in both axes when the diagram is
+    // larger than the iframe. Sent once by the parent (the modal) right
+    // after the iframe loads.
+    const modal = data.mode === 'modal';
+    document.documentElement.classList.toggle('puml-modal', modal);
+    TRACE('PLANTUML_SET_MODE received, mode=' + data.mode + ' -> puml-modal=' + modal);
+    return;
+  }
   if (data.type === 'PLANTUML_COPY_BITMAP') {
     TRACE('PLANTUML_COPY_BITMAP received from origin=' + event.origin +
           ' requestId=' + data.requestId);

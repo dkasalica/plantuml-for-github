@@ -1,3 +1,4 @@
+#if CHROME
 // =====================================================================
 // PlantUML for GitHub - Renderer (sandbox iframe)
 // =====================================================================
@@ -13,6 +14,33 @@ const TRACE = (...args) => console.log('[PUML4GH][renderer]', ...args);
 TRACE('renderer.js module loaded, location=', location.href);
 TRACE('render import =', typeof render);
 // ===================
+#endif
+#if FIREFOX
+// =====================================================================
+// PlantUML for GitHub - Renderer (Firefox build)
+// =====================================================================
+// Runs inside the renderer iframe. Loads the TeaVM-compiled PlantUML
+// engine (split into 7 classic-script chunks by renderer.html to stay
+// under Mozilla AMO's 5 MB per-file limit), listens for
+// PLANTUML_RENDER messages from the parent page, renders the diagram,
+// and posts the SVG back.
+// =====================================================================
+
+// ====== TRACE ======
+const TRACE = (...args) => console.log('[PUML4GH][renderer]', ...args);
+TRACE('renderer.js loaded, location=', location.href);
+// ===================
+
+// renderer.html loads vendor/plantuml.0.js ... plantuml.6.js as classic
+// <script> tags BEFORE this file. The final chunk publishes the public
+// API on window.__plantuml, so it is guaranteed to be available by the
+// time we get here.
+if (!window.__plantuml || typeof window.__plantuml.render !== 'function') {
+  throw new Error('PlantUML engine did not load: window.__plantuml.render is missing');
+}
+const render = window.__plantuml.render;
+TRACE('plantuml engine available, render=', typeof render);
+#endif
 
 const output = document.getElementById('plantuml-output');
 TRACE('output element =', output);

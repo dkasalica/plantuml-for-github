@@ -190,6 +190,12 @@
       '<circle cx="8.5" cy="8.5" r="1.5"/>' +
       '<polyline points="21,15 16,10 5,21"/>' +
       '</svg>';
+    // Pencil icon -- used by the "Edit as draft" button.
+    // Octicons-style pencil rendered at 14x14 to match the other header buttons.
+    const ICON_PENCIL =
+      '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">' +
+      '<path d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 0 1-.927-.928l.929-3.25c.081-.286.235-.547.445-.758l8.61-8.61Zm.176 4.823L9.75 4.81l-6.286 6.287a.253.253 0 0 0-.064.108l-.558 1.953 1.953-.558a.253.253 0 0 0 .108-.064Zm1.238-3.763a.25.25 0 0 0-.354 0L10.811 3.75l1.439 1.44 1.263-1.263a.25.25 0 0 0 0-.354Z"/>' +
+      '</svg>';
     toggleBtn.innerHTML = ICON_CODE;
 
     // Second header button: copy the rendered diagram to the clipboard
@@ -214,9 +220,33 @@
       bitmapBtn.style.background = 'transparent';
     });
     bitmapBtn.innerHTML = ICON_IMAGE;
-    // Toggle on the LEFT, then bitmap-copy, then badge on the RIGHT.
+
+    // Third header button: open the diagram source in a large modal
+    // iframe for editing as a draft. For now this just shows a stub
+    // modal; the actual editor will be wired up later.
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'plantuml-for-github-edit-draft';
+    editBtn.setAttribute('aria-label', 'Edit as draft');
+    editBtn.title = 'Edit as draft';
+    editBtn.style.cssText =
+      'display: inline-flex; align-items: center; justify-content: center; ' +
+      'width: 22px; height: 22px; padding: 0; margin: 0 4px 0 0; ' +
+      'background: transparent; border: 1px solid transparent; ' +
+      'border-radius: 4px; cursor: pointer; ' +
+      'color: ' + t.wrapperFg + ';';
+    editBtn.addEventListener('mouseenter', () => {
+      editBtn.style.background = t.borderCol;
+    });
+    editBtn.addEventListener('mouseleave', () => {
+      editBtn.style.background = 'transparent';
+    });
+    editBtn.innerHTML = ICON_PENCIL;
+
+    // Toggle on the LEFT, then bitmap-copy, then edit-as-draft, then badge on the RIGHT.
     header.appendChild(toggleBtn);
     header.appendChild(bitmapBtn);
+    header.appendChild(editBtn);
     header.appendChild(badge);
     // With both children left-aligned, switch the header from
     // space-between to flex-start so they sit next to each other.
@@ -232,7 +262,7 @@
     iframe.setAttribute('title', 'PlantUML diagram');
 
     wrapper.appendChild(iframe);
-    return { wrapper, iframe, toggleBtn, bitmapBtn, icons: { code: ICON_CODE, eye: ICON_EYE, image: ICON_IMAGE } };
+    return { wrapper, iframe, toggleBtn, bitmapBtn, editBtn, theme: t, icons: { code: ICON_CODE, eye: ICON_EYE, image: ICON_IMAGE, pencil: ICON_PENCIL } };
   }
 
   // ------------------------------------------------------------------
@@ -267,7 +297,7 @@
 
     const requestId = `puml-${++blockCounter}-${Date.now()}`;
     const dark = isDarkMode();
-    const { wrapper, iframe, toggleBtn, bitmapBtn, icons } = buildIframe(requestId, dark);
+    const { wrapper, iframe, toggleBtn, bitmapBtn, editBtn, theme: t, icons } = buildIframe(requestId, dark);
 
     // Insert the wrapper *before* the original block, then move the
     // original block INSIDE the wrapper (after the iframe). This keeps
@@ -383,6 +413,334 @@
           bitmapBtn.title = prevTitle;
         }, 2000);
       }
+    });
+
+    // ------------------------------------------------------------------
+    // Edit-as-draft button: open a large modal with a textarea on the
+    // left and a live preview iframe on the right. The preview iframe
+    // reuses renderer.html and is re-rendered on every keystroke.
+    // ------------------------------------------------------------------
+    editBtn.addEventListener('click', () => {
+      TRACE('edit-as-draft clicked, requestId=' + requestId);
+
+      // Backdrop covers the whole viewport and dims the page behind.
+      const backdrop = document.createElement('div');
+      backdrop.className = 'plantuml-for-github-edit-backdrop';
+      backdrop.style.cssText =
+        'position: fixed; inset: 0; z-index: 2147483647; ' +
+        'background: rgba(0, 0, 0, 0.5); ' +
+        'display: flex; align-items: center; justify-content: center;';
+
+      // Modal container.
+      const modal = document.createElement('div');
+      modal.style.cssText =
+        'width: 90vw; height: 85vh; ' +
+        'background: ' + t.iframeBg + '; ' +
+        'color: ' + t.wrapperFg + '; ' +
+        'border: 1px solid ' + t.borderCol + '; ' +
+        'border-radius: 8px; ' +
+        'box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3); ' +
+        'display: flex; flex-direction: column; overflow: hidden;';
+
+      // Modal header with title + close button.
+      const modalHeader = document.createElement('div');
+      modalHeader.style.cssText =
+        'display: flex; align-items: center; justify-content: space-between; ' +
+        'padding: 10px 16px; border-bottom: 1px solid ' + t.borderCol + '; ' +
+        'background: ' + t.wrapperBg + ';';
+
+      // Left side of the header: bitmap-copy button + title.
+      const headerLeft = document.createElement('div');
+      headerLeft.style.cssText = 'display: flex; align-items: center; gap: 10px;';
+
+      // Bitmap-copy button -- same look & behaviour as the inline header
+      // button, but it asks the draft renderer for the PNG instead of the
+      // main wrapper's iframe.
+      const modalBitmapBtn = document.createElement('button');
+      modalBitmapBtn.type = 'button';
+      modalBitmapBtn.className = 'plantuml-for-github-modal-copy-bitmap';
+      modalBitmapBtn.setAttribute('aria-label', 'Copy diagram as bitmap');
+      modalBitmapBtn.title = 'Copy diagram as bitmap';
+      modalBitmapBtn.style.cssText =
+        'display: inline-flex; align-items: center; justify-content: center; ' +
+        'width: 28px; height: 28px; padding: 0; ' +
+        'background: transparent; border: 1px solid transparent; ' +
+        'border-radius: 4px; cursor: pointer; ' +
+        'color: ' + t.wrapperFg + ';';
+      modalBitmapBtn.addEventListener('mouseenter', () => {
+        modalBitmapBtn.style.background = t.borderCol;
+      });
+      modalBitmapBtn.addEventListener('mouseleave', () => {
+        modalBitmapBtn.style.background = 'transparent';
+      });
+      modalBitmapBtn.innerHTML = icons.image;
+
+      const modalTitle = document.createElement('div');
+      modalTitle.textContent = '⚠️ Draft — Your changes disappear on close —  Please copy/paste if you want to save';
+      modalTitle.style.cssText =
+        'font: 600 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; ' +
+        'color: ' + t.wrapperFg + ';';
+
+      headerLeft.appendChild(modalBitmapBtn);
+      headerLeft.appendChild(modalTitle);
+
+      const closeBtn = document.createElement('button');
+      closeBtn.type = 'button';
+      closeBtn.setAttribute('aria-label', 'Close');
+      closeBtn.title = 'Close';
+      closeBtn.style.cssText =
+        'display: inline-flex; align-items: center; justify-content: center; ' +
+        'width: 28px; height: 28px; padding: 0; ' +
+        'background: transparent; border: 1px solid transparent; ' +
+        'border-radius: 4px; cursor: pointer; ' +
+        'color: ' + t.wrapperFg + ';';
+      closeBtn.addEventListener('mouseenter', () => {
+        closeBtn.style.background = t.borderCol;
+      });
+      closeBtn.addEventListener('mouseleave', () => {
+        closeBtn.style.background = 'transparent';
+      });
+      // Cross / X icon (Octicons-style).
+      closeBtn.innerHTML =
+        '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">' +
+        '<path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.749.749 0 0 1 1.275.326.749.749 0 0 1-.215.734L9.06 8l3.22 3.22a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215L8 9.06l-3.22 3.22a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z"/>' +
+        '</svg>';
+
+      modalHeader.appendChild(headerLeft);
+      modalHeader.appendChild(closeBtn);
+
+      // Modal body: two columns -- textarea on the left, live SVG preview
+      // on the right. The preview is driven by a dedicated renderer iframe
+      // (same renderer.html as the inline diagrams) that we re-render on
+      // every textarea change.
+      const modalBody = document.createElement('div');
+      modalBody.style.cssText =
+        'flex: 1; display: flex; flex-direction: row; min-height: 0; ' +
+        'background: ' + t.iframeBg + ';';
+
+      // Left column: editor.
+      const leftCol = document.createElement('div');
+      leftCol.style.cssText =
+        'flex: 1 1 50%; min-width: 0; display: flex; ' +
+        'border-right: 1px solid ' + t.borderCol + ';';
+
+      const textarea = document.createElement('textarea');
+      textarea.value = source;
+      textarea.spellcheck = false;
+      textarea.setAttribute('autocapitalize', 'none');
+      textarea.setAttribute('autocorrect', 'off');
+      textarea.style.cssText =
+        'flex: 1; width: 100%; height: 100%; box-sizing: border-box; ' +
+        'padding: 12px; margin: 0; resize: none; ' +
+        'border: none; outline: none; ' +
+        'background: ' + t.iframeBg + '; ' +
+        'color: ' + (dark ? '#e6edf3' : '#1f2328') + '; ' +
+        'font: 13px/1.5 ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; ' +
+        'tab-size: 4;';
+      leftCol.appendChild(textarea);
+
+      // Right column: preview area. We host the renderer directly as a
+      // visible iframe (same renderer.html as the inline diagrams). The
+      // renderer's own <html>/<body> already provides correct padding
+      // around the SVG, so we don't need any extra CSS gymnastics here
+      // -- just let it fill the column and scroll if the diagram is big.
+      const rightCol = document.createElement('div');
+      rightCol.style.cssText =
+        'flex: 1 1 50%; min-width: 0; display: flex; ' +
+        'background: ' + t.iframeBg + ';';
+
+      const draftRenderer = document.createElement('iframe');
+      draftRenderer.src = RENDERER_URL;
+      draftRenderer.sandbox = 'allow-scripts';
+      draftRenderer.style.cssText =
+        'flex: 1; width: 100%; height: 100%; ' +
+        'border: none; display: block; background: ' + t.iframeBg + ';';
+      draftRenderer.setAttribute('title', 'PlantUML draft preview');
+      rightCol.appendChild(draftRenderer);
+
+      modalBody.appendChild(leftCol);
+      modalBody.appendChild(rightCol);
+
+      modal.appendChild(modalHeader);
+      modal.appendChild(modalBody);
+      backdrop.appendChild(modal);
+
+      // ----------------------------------------------------------------
+      // Live rendering: post the textarea content to the draft renderer
+      // iframe on every keystroke (no debounce -- the TeaVM engine is
+      // fast enough to keep up, and stale results are filtered out by
+      // requestId comparison below).
+      // ----------------------------------------------------------------
+      const draftIdPrefix = 'puml-draft-' + requestId + '-';
+      let draftCounter = 0;
+      let latestDraftId = null;
+      let draftReady = false;
+      let pendingSource = null;
+
+      function postRender(src) {
+        if (!draftReady) {
+          pendingSource = src;
+          return;
+        }
+        const id = draftIdPrefix + (++draftCounter);
+        latestDraftId = id;
+        let targetOrigin = RENDERER_ORIGIN;
+        try {
+          const sb = draftRenderer.getAttribute('sandbox') || '';
+          const opaque = sb.includes('allow-scripts') && !sb.includes('allow-same-origin');
+          if (opaque) targetOrigin = '*';
+        } catch (e) { /* ignore */ }
+        draftRenderer.contentWindow.postMessage({
+          type: 'PLANTUML_RENDER',
+          source: src,
+          requestId: id,
+          options: { dark }
+        }, targetOrigin);
+        TRACE('draft render posted, id=' + id + ' src.len=' + src.length);
+      }
+
+      function onDraftMessage(event) {
+        if (event.source !== draftRenderer.contentWindow) return;
+        const d = event.data;
+        if (!d || typeof d !== 'object') return;
+        if (d.type !== 'PLANTUML_RESULT' && d.type !== 'PLANTUML_ERROR') return;
+        if (typeof d.requestId !== 'string' || d.requestId.indexOf(draftIdPrefix) !== 0) return;
+        // The renderer iframe displays the SVG itself; we don't need to
+        // do anything with the result other than swallow stale-message
+        // logging. The error case is already shown inline by renderer.js.
+        if (d.requestId !== latestDraftId) {
+          TRACE('draft stale result ignored, id=' + d.requestId);
+        }
+      }
+      window.addEventListener('message', onDraftMessage);
+
+      draftRenderer.addEventListener('load', () => {
+        draftReady = true;
+        // Tell the renderer to switch to modal layout mode so the SVG
+        // keeps its intrinsic size and the body scrolls in both axes
+        // when the diagram overflows.
+        let targetOrigin = RENDERER_ORIGIN;
+        try {
+          const sb = draftRenderer.getAttribute('sandbox') || '';
+          const opaque = sb.includes('allow-scripts') && !sb.includes('allow-same-origin');
+          if (opaque) targetOrigin = '*';
+        } catch (e) { /* ignore */ }
+        draftRenderer.contentWindow.postMessage({
+          type: 'PLANTUML_SET_MODE',
+          mode: 'modal'
+        }, targetOrigin);
+        // Send the initial render (or anything queued while the iframe loaded).
+        postRender(pendingSource != null ? pendingSource : textarea.value);
+        pendingSource = null;
+      });
+
+      textarea.addEventListener('input', () => postRender(textarea.value));
+
+      // ----------------------------------------------------------------
+      // Modal bitmap-copy button: same Promise<Blob>+ClipboardItem dance
+      // as the inline button, but targeting the draft renderer iframe.
+      // ----------------------------------------------------------------
+      const modalPendingBitmap = new Map();
+      let modalBitmapCounter = 0;
+
+      function onModalBitmapMessage(event) {
+        if (event.source !== draftRenderer.contentWindow) return;
+        const d = event.data;
+        if (!d || typeof d !== 'object') return;
+        if (d.type !== 'PLANTUML_BITMAP_RESULT' && d.type !== 'PLANTUML_BITMAP_ERROR') return;
+        const pending = modalPendingBitmap.get(d.requestId);
+        if (!pending) return;
+        modalPendingBitmap.delete(d.requestId);
+        if (d.type === 'PLANTUML_BITMAP_RESULT' && d.blob instanceof Blob) {
+          pending.resolve(d.blob);
+        } else {
+          pending.reject(new Error(d.error || 'Unknown bitmap copy error'));
+        }
+      }
+      window.addEventListener('message', onModalBitmapMessage);
+
+      modalBitmapBtn.addEventListener('click', async () => {
+        const reqId = 'modal-bitmap-' + requestId + '-' + (++modalBitmapCounter) + '-' + Date.now();
+        TRACE('modal bitmap clicked, requestId=' + reqId);
+
+        let resolveBlob, rejectBlob;
+        const blobPromise = new Promise((resolve, reject) => {
+          resolveBlob = resolve;
+          rejectBlob = reject;
+        });
+        const timeoutId = setTimeout(() => {
+          if (modalPendingBitmap.has(reqId)) {
+            modalPendingBitmap.delete(reqId);
+            rejectBlob(new Error('Bitmap copy timed out after 10s'));
+          }
+        }, 10000);
+        modalPendingBitmap.set(reqId, {
+          resolve: (b) => { clearTimeout(timeoutId); resolveBlob(b); },
+          reject:  (e) => { clearTimeout(timeoutId); rejectBlob(e); }
+        });
+
+        let targetOrigin = RENDERER_ORIGIN;
+        try {
+          const sb = draftRenderer.getAttribute('sandbox') || '';
+          const opaque = sb.includes('allow-scripts') && !sb.includes('allow-same-origin');
+          if (opaque) targetOrigin = '*';
+        } catch (e) { /* ignore */ }
+
+        draftRenderer.contentWindow.postMessage({
+          type: 'PLANTUML_COPY_BITMAP',
+          requestId: reqId
+        }, targetOrigin);
+
+        try {
+          const item = new ClipboardItem({ 'image/png': blobPromise });
+          await navigator.clipboard.write([item]);
+          TRACE('modal clipboard write succeeded for requestId=' + reqId);
+          const prevBg = modalBitmapBtn.style.background;
+          modalBitmapBtn.style.background = '#2da44e';
+          modalBitmapBtn.style.color = '#ffffff';
+          setTimeout(() => {
+            modalBitmapBtn.style.background = prevBg;
+            modalBitmapBtn.style.color = t.wrapperFg;
+          }, 600);
+        } catch (err) {
+          TRACE('modal clipboard write failed for requestId=' + reqId + ':', err);
+          modalPendingBitmap.delete(reqId);
+          const prevBg = modalBitmapBtn.style.background;
+          const prevTitle = modalBitmapBtn.title;
+          modalBitmapBtn.style.background = '#cf222e';
+          modalBitmapBtn.style.color = '#ffffff';
+          modalBitmapBtn.title = 'Copy failed: ' + (err && err.message ? err.message : err);
+          setTimeout(() => {
+            modalBitmapBtn.style.background = prevBg;
+            modalBitmapBtn.style.color = t.wrapperFg;
+            modalBitmapBtn.title = prevTitle;
+          }, 2000);
+        }
+      });
+
+      // Closing logic: button, backdrop click outside the modal, or Escape key.
+      const close = () => {
+        TRACE('edit-as-draft modal closing, requestId=' + requestId);
+        window.removeEventListener('message', onDraftMessage);
+        window.removeEventListener('message', onModalBitmapMessage);
+        document.removeEventListener('keydown', onKeyDown);
+        backdrop.remove();
+      };
+      const onKeyDown = (e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          close();
+        }
+      };
+      closeBtn.addEventListener('click', close);
+      backdrop.addEventListener('click', (e) => {
+        if (e.target === backdrop) close();
+      });
+      document.addEventListener('keydown', onKeyDown);
+
+      document.body.appendChild(backdrop);
+      // Move keyboard focus into the editor for immediate typing.
+      textarea.focus();
     });
 
     iframe.addEventListener('load', () => {

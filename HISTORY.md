@@ -4,6 +4,21 @@ All notable changes to **PlantUML for GitHub** are documented here.
 The project is published as two browser extensions (Chrome and Firefox)
 that share the same version number from `0.2.2` onward.
 
+## 0.2.3
+
+- Added an **Edit as draft** button (pencil icon) in the diagram
+  header that opens a large two-column editor: the PlantUML source
+  on the left, a live preview on the right that updates as you type.
+- The modal includes a **Copy as bitmap** button so you can grab a
+  PNG of your edited diagram.
+- Drafts are local only: your changes never touch the GitHub source
+  and are discarded when you close the modal. Copy/paste the source
+  if you want to keep your edits.
+- Close the modal with the close button, by clicking outside it, or
+  by pressing Escape.
+- The preview shows scrollbars when the diagram is too large to fit,
+  so big diagrams stay readable at their natural size.
+
 ## 0.2.2
 
 - Added a **Copy as bitmap** button in the diagram header that copies

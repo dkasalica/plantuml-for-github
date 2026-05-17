@@ -23,6 +23,20 @@
     #plantuml-output {
       min-height: 40px;
     }
+    /* Modal mode: let the SVG keep its intrinsic size and scroll the body
+       in both axes if it overflows. Activated by renderer.js when the
+       parent posts PLANTUML_SET_MODE with mode='modal'. We don't force
+       width/height to 100% -- that would make Chromium reserve room for
+       scrollbars even when they aren't needed. overflow:auto alone is
+       enough: scrollbars appear iff the content actually overflows. */
+    html.puml-modal, html.puml-modal body {
+      overflow: auto;
+    }
+    html.puml-modal #plantuml-output svg {
+      max-width: none;
+      height: auto;
+      width: auto;
+    }
     .puml-error {
       color: #cf222e;
       background: #ffebe9;
