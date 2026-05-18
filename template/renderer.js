@@ -94,6 +94,35 @@ window.addEventListener('message', (event) => {
     return;
   }
 
+  if (data.type === 'PLANTUML_COPY_SVG') {
+    // The parent (content script) asks for the SVG markup so it can
+    // write it to the clipboard from a real github.com origin -- the
+    // sandboxed iframe cannot reach navigator.clipboard itself.
+    TRACE('PLANTUML_COPY_SVG received from origin=' + event.origin +
+          ' requestId=' + data.requestId);
+    if (typeof data.requestId !== 'string') {
+      TRACE('invalid svg-copy message shape, ignoring');
+      return;
+    }
+    try {
+      const svgString = serializeSvg();
+      TRACE('serializeSvg ok, len=' + svgString.length);
+      event.source.postMessage({
+        type: 'PLANTUML_SVG_RESULT',
+        requestId: data.requestId,
+        svg: svgString
+      }, event.origin);
+    } catch (err) {
+      TRACE('serializeSvg failed:', err);
+      event.source.postMessage({
+        type: 'PLANTUML_SVG_ERROR',
+        requestId: data.requestId,
+        error: String(err && err.message ? err.message : err)
+      }, event.origin);
+    }
+    return;
+  }
+
   if (data.type !== 'PLANTUML_RENDER') {
     return;
   }
@@ -134,6 +163,133 @@ window.addEventListener('message', (event) => {
     });
 });
 TRACE('message listener attached');
+
+// ------------------------------------------------------------------
+// Context menu shown on right-click over the rendered SVG.
+// Currently provides "Copy as bitmap" and "Copy as SVG". Clicks
+// post a PLANTUML_CTX_MENU_ACTION message to the parent (content
+// script), which performs the actual clipboard write from a real
+// github.com origin.
+//
+// Implemented inside the renderer iframe (rather than the parent
+// content script) so positioning is straightforward and the menu
+// doesn't have to cross the iframe boundary. Event delegation on
+// #plantuml-output keeps it working after every re-render (notably
+// in the live preview of the edit-as-draft modal).
+// ------------------------------------------------------------------
+let ctxMenuEl = null;
+
+function closeContextMenu() {
+  if (ctxMenuEl) {
+    ctxMenuEl.remove();
+    ctxMenuEl = null;
+    document.removeEventListener('mousedown', onDocMouseDownForMenu, true);
+    document.removeEventListener('keydown',   onDocKeyDownForMenu,   true);
+    window.removeEventListener('blur',        closeContextMenu);
+    window.removeEventListener('scroll',      closeContextMenu, true);
+    window.removeEventListener('resize',      closeContextMenu);
+    TRACE('context menu closed');
+  }
+}
+
+function onDocMouseDownForMenu(e) {
+  // Close on any click outside the menu. A click inside is handled
+  // by the <li> click listeners (which call closeContextMenu themselves).
+  if (ctxMenuEl && !ctxMenuEl.contains(e.target)) {
+    closeContextMenu();
+  }
+}
+
+function onDocKeyDownForMenu(e) {
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    closeContextMenu();
+  }
+}
+
+function showContextMenu(clientX, clientY) {
+  // Replace any previously-open menu first.
+  closeContextMenu();
+
+  const menu = document.createElement('ul');
+  menu.className = 'puml-ctx-menu';
+  menu.setAttribute('role', 'menu');
+
+  // Menu entries. Wiring: clicking a menu item posts a message to
+  // the parent (content script), which performs the actual clipboard
+  // write from a real github.com origin. The user gesture from the
+  // click propagates across the iframe boundary via the user-activation
+  // model, so navigator.clipboard.write() succeeds in the parent.
+  const ENTRIES = [
+    { id: 'copy-bitmap', label: 'Copy as bitmap' },
+    { id: 'copy-svg',    label: 'Copy as SVG' }
+  ];
+  for (const entry of ENTRIES) {
+    const li = document.createElement('li');
+    li.setAttribute('role', 'menuitem');
+    li.dataset.action = entry.id;
+    li.textContent = entry.label;
+    li.addEventListener('click', () => {
+      TRACE('context menu action selected:', entry.id);
+      // Post the request to the parent. The parent's window is always
+      // reachable via window.parent here (we live in an iframe).
+      // targetOrigin '*' is safe because the message is a one-way
+      // signal carrying no secret -- it only tells the parent which
+      // menu entry was clicked.
+      try {
+        window.parent.postMessage({
+          type: 'PLANTUML_CTX_MENU_ACTION',
+          action: entry.id
+        }, '*');
+      } catch (err) {
+        TRACE('failed to post ctx-menu action to parent:', err);
+      }
+      closeContextMenu();
+    });
+    menu.appendChild(li);
+  }
+
+  // Append first (offscreen) so we can measure, then clamp to viewport
+  // so the menu doesn't get cut off near the right/bottom edges.
+  menu.style.left = '-9999px';
+  menu.style.top  = '-9999px';
+  document.body.appendChild(menu);
+  const rect = menu.getBoundingClientRect();
+  const vw   = document.documentElement.clientWidth;
+  const vh   = document.documentElement.clientHeight;
+  let   x    = clientX;
+  let   y    = clientY;
+  if (x + rect.width  > vw) x = Math.max(0, vw - rect.width  - 2);
+  if (y + rect.height > vh) y = Math.max(0, vh - rect.height - 2);
+  menu.style.left = x + 'px';
+  menu.style.top  = y + 'px';
+
+  ctxMenuEl = menu;
+
+  // Use capture phase so we win against any listeners inside the menu.
+  document.addEventListener('mousedown', onDocMouseDownForMenu, true);
+  document.addEventListener('keydown',   onDocKeyDownForMenu,   true);
+  // Anything that changes the layout under the menu invalidates it.
+  window.addEventListener('blur',   closeContextMenu);
+  window.addEventListener('scroll', closeContextMenu, true);
+  window.addEventListener('resize', closeContextMenu);
+
+  TRACE('context menu opened at (' + x + ',' + y + ')');
+}
+
+// Delegated right-click handler on the output container. Fires for
+// every right-click on or inside the rendered SVG, including children
+// re-created on each render.
+output.addEventListener('contextmenu', (e) => {
+  // Only intercept right-clicks that actually land on an SVG.
+  const target = e.target;
+  if (!target || (target.nodeName !== 'svg' && !target.closest('svg'))) {
+    return;
+  }
+  e.preventDefault();
+  showContextMenu(e.clientX, e.clientY);
+});
+TRACE('context menu handler attached on #plantuml-output');
 
 // Global error traps so silent failures show up.
 window.addEventListener('error', (e) => {
@@ -274,6 +430,25 @@ function showError(message) {
 }
 
 // ------------------------------------------------------------------
+// Serialize the SVG currently in #plantuml-output to a standalone
+// XML string. Throws if no SVG is present. The result is what the
+// parent (content script) writes to the clipboard for "Copy as SVG".
+// ------------------------------------------------------------------
+function serializeSvg() {
+  const svg = output.querySelector('svg');
+  if (svg == null) {
+    throw new Error('No SVG to copy');
+  }
+  const clone = svg.cloneNode(true);
+  // xmlns is required for the string to round-trip as a standalone
+  // SVG document (paste into Inkscape, save to a .svg file, etc.).
+  if (clone.getAttribute('xmlns') == null) {
+    clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  }
+  return new XMLSerializer().serializeToString(clone);
+}
+
+// ------------------------------------------------------------------
 // Convert the SVG currently in #plantuml-output to a PNG Blob.
 // Returns a promise resolving with the PNG blob. The iframe is
 // sandboxed without allow-same-origin, so we can't call
@@ -288,11 +463,7 @@ async function svgToPngBlob() {
   }
 
   // Serialize SVG with proper xmlns (required for standalone rendering).
-  const clone = svg.cloneNode(true);
-  if (clone.getAttribute('xmlns') == null) {
-    clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
-  }
-  const svgString = new XMLSerializer().serializeToString(clone);
+  const svgString = serializeSvg();
   const svgBlob = new Blob([svgString], {type: 'image/svg+xml;charset=utf-8'});
   const url = URL.createObjectURL(svgBlob);
 

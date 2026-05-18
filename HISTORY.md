@@ -4,6 +4,24 @@ All notable changes to **PlantUML for GitHub** are documented here.
 The project is published as two browser extensions (Chrome and Firefox)
 that share the same version number from `0.2.2` onward.
 
+## 0.2.4
+
+- Added a **right-click context menu** on the rendered diagram with
+  two entries: **Copy as bitmap** and **Copy as SVG**. The menu
+  appears wherever you right-click on the SVG itself (inline or in
+  the edit-as-draft preview) and matches GitHub's light/dark theme.
+- **Copy as SVG** writes the SVG markup to the clipboard as
+  `text/plain` (with the `xmlns` attribute set so the result is a
+  valid standalone SVG document -- paste into Inkscape, save to a
+  `.svg` file, etc.).
+- **Copy as bitmap** from the context menu writes a PNG to the
+  clipboard using the same engine as the header bitmap button
+  (`devicePixelRatio` scaling, theme background). The header button
+  keeps its existing visual feedback; the context-menu version is
+  silent.
+- The menu closes on outside click, Escape, scroll, resize, window
+  blur, or selecting an entry.
+
 ## 0.2.3
 
 - Added an **Edit as draft** button (pencil icon) in the diagram

@@ -286,6 +286,119 @@
   const pendingBitmapRequests = new Map();
   let bitmapCounter = 0;
 
+  // ------------------------------------------------------------------
+  // Pending SVG-copy requests, keyed by requestId. Same mechanism as
+  // pendingBitmapRequests but for "Copy as SVG" (text/plain payload).
+  // ------------------------------------------------------------------
+  const pendingSvgRequests = new Map();
+  let svgCounter = 0;
+
+  // ------------------------------------------------------------------
+  // Resolve the right postMessage targetOrigin for a renderer iframe.
+  // Same probe used everywhere: sandbox="allow-scripts" without
+  // allow-same-origin gives the iframe an opaque "null" origin, and
+  // chrome-extension://... messages get dropped unless we use '*'.
+  // ------------------------------------------------------------------
+  function targetOriginFor(iframe) {
+    try {
+      const sb = iframe.getAttribute('sandbox') || '';
+      const opaque = sb.includes('allow-scripts') && !sb.includes('allow-same-origin');
+      if (opaque) return '*';
+    } catch (e) { /* ignore */ }
+    return RENDERER_ORIGIN;
+  }
+
+  // ------------------------------------------------------------------
+  // "Copy as SVG" -- request the SVG string from the given iframe and
+  // write it to the clipboard as text/plain. Silent on success/failure;
+  // errors are only logged. Used by the renderer's context menu.
+  // ------------------------------------------------------------------
+  async function copySvgFromIframe(iframe) {
+    const svgReqId = `svg-${++svgCounter}-${Date.now()}`;
+    TRACE('copySvgFromIframe, requestId=' + svgReqId);
+
+    // Promise resolved/rejected when the iframe responds.
+    let resolveBlob, rejectBlob;
+    const blobPromise = new Promise((resolve, reject) => {
+      resolveBlob = resolve;
+      rejectBlob  = reject;
+    });
+    const timeoutId = setTimeout(() => {
+      if (pendingSvgRequests.has(svgReqId)) {
+        pendingSvgRequests.delete(svgReqId);
+        rejectBlob(new Error('SVG copy timed out after 10s'));
+      }
+    }, 10000);
+    pendingSvgRequests.set(svgReqId, {
+      resolve: (svg) => {
+        clearTimeout(timeoutId);
+        // Wrap the string in a Blob so the same Promise<Blob>+ClipboardItem
+        // dance as for bitmap works here too. text/plain is the safest,
+        // most-supported MIME for clipboard interop.
+        resolveBlob(new Blob([svg], { type: 'text/plain' }));
+      },
+      reject: (err) => { clearTimeout(timeoutId); rejectBlob(err); }
+    });
+
+    iframe.contentWindow.postMessage({
+      type: 'PLANTUML_COPY_SVG',
+      requestId: svgReqId
+    }, targetOriginFor(iframe));
+    TRACE('PLANTUML_COPY_SVG posted, requestId=' + svgReqId);
+
+    try {
+      const item = new ClipboardItem({ 'text/plain': blobPromise });
+      await navigator.clipboard.write([item]);
+      TRACE('SVG clipboard write succeeded for requestId=' + svgReqId);
+    } catch (err) {
+      TRACE('SVG clipboard write failed for requestId=' + svgReqId + ':', err);
+      pendingSvgRequests.delete(svgReqId);
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // "Copy as bitmap" -- request the PNG blob from the given iframe and
+  // write it to the clipboard as image/png. Silent on success/failure;
+  // errors are only logged. Used by the renderer's context menu. The
+  // header bitmap buttons keep their own logic with visual feedback;
+  // this helper exists solely for the context-menu code path.
+  // ------------------------------------------------------------------
+  async function copyBitmapFromIframe(iframe) {
+    const bitmapReqId = `bitmap-ctx-${++bitmapCounter}-${Date.now()}`;
+    TRACE('copyBitmapFromIframe, requestId=' + bitmapReqId);
+
+    let resolveBlob, rejectBlob;
+    const blobPromise = new Promise((resolve, reject) => {
+      resolveBlob = resolve;
+      rejectBlob  = reject;
+    });
+    const timeoutId = setTimeout(() => {
+      if (pendingBitmapRequests.has(bitmapReqId)) {
+        pendingBitmapRequests.delete(bitmapReqId);
+        rejectBlob(new Error('Bitmap copy timed out after 10s'));
+      }
+    }, 10000);
+    pendingBitmapRequests.set(bitmapReqId, {
+      resolve: (blob) => { clearTimeout(timeoutId); resolveBlob(blob); },
+      reject:  (err)  => { clearTimeout(timeoutId); rejectBlob(err); }
+    });
+
+    iframe.contentWindow.postMessage({
+      type: 'PLANTUML_COPY_BITMAP',
+      requestId: bitmapReqId
+    }, targetOriginFor(iframe));
+    TRACE('PLANTUML_COPY_BITMAP posted from ctx menu, requestId=' + bitmapReqId);
+
+    try {
+      const item = new ClipboardItem({ 'image/png': blobPromise });
+      await navigator.clipboard.write([item]);
+      TRACE('bitmap clipboard write succeeded for requestId=' + bitmapReqId);
+    } catch (err) {
+      TRACE('bitmap clipboard write failed for requestId=' + bitmapReqId + ':', err);
+      pendingBitmapRequests.delete(bitmapReqId);
+    }
+  }
+
   function processBlock(blockEl) {
     blockEl.classList.add(PROCESSED_CLASS);
 
@@ -785,19 +898,56 @@
     // Trace every message of interest (filter out noise)
     if (data && typeof data === 'object' &&
         (data.type === 'PLANTUML_RESULT' || data.type === 'PLANTUML_ERROR' ||
-         data.type === 'PLANTUML_BITMAP_RESULT' || data.type === 'PLANTUML_BITMAP_ERROR')) {
+         data.type === 'PLANTUML_BITMAP_RESULT' || data.type === 'PLANTUML_BITMAP_ERROR' ||
+         data.type === 'PLANTUML_SVG_RESULT' || data.type === 'PLANTUML_SVG_ERROR' ||
+         data.type === 'PLANTUML_CTX_MENU_ACTION')) {
       TRACE('message received from origin=' + event.origin + ' type=' + data.type +
             ' requestId=' + data.requestId +
             (data.type === 'PLANTUML_ERROR' ? ' error=' + data.error : '') +
             (data.type === 'PLANTUML_BITMAP_ERROR' ? ' error=' + data.error : '') +
+            (data.type === 'PLANTUML_SVG_ERROR' ? ' error=' + data.error : '') +
             (data.type === 'PLANTUML_RESULT' ? ' height=' + data.height : '') +
-            (data.type === 'PLANTUML_BITMAP_RESULT' ? ' blob.size=' + (data.blob && data.blob.size) : ''));
+            (data.type === 'PLANTUML_BITMAP_RESULT' ? ' blob.size=' + (data.blob && data.blob.size) : '') +
+            (data.type === 'PLANTUML_SVG_RESULT' ? ' svg.len=' + (data.svg && data.svg.length) : '') +
+            (data.type === 'PLANTUML_CTX_MENU_ACTION' ? ' action=' + data.action : ''));
     }
 
     // Only accept messages from our own renderer origin.
     if (event.origin !== RENDERER_ORIGIN && event.origin !== 'null') return;
 
     if (!data || typeof data !== 'object') return;
+
+    // Handle context-menu actions: the renderer iframe asks us to perform
+    // a clipboard operation on its behalf (because the sandboxed iframe
+    // can't reach navigator.clipboard, and the user gesture must originate
+    // from a real github.com origin). The click in the menu propagates a
+    // user activation here, so navigator.clipboard.write() will succeed.
+    if (data.type === 'PLANTUML_CTX_MENU_ACTION') {
+      // Find the iframe that posted this message. Both inline and modal
+      // (draft) renderer iframes are matched -- we look up by
+      // contentWindow identity, not by data-request-id, so the draft
+      // iframe (which has no request id) works too.
+      let sourceIframe = null;
+      const iframes = document.querySelectorAll('iframe');
+      for (const fr of iframes) {
+        if (fr.contentWindow === event.source) {
+          sourceIframe = fr;
+          break;
+        }
+      }
+      if (!sourceIframe) {
+        TRACE('PLANTUML_CTX_MENU_ACTION: source iframe not found, ignoring');
+        return;
+      }
+      if (data.action === 'copy-svg') {
+        copySvgFromIframe(sourceIframe);
+      } else if (data.action === 'copy-bitmap') {
+        copyBitmapFromIframe(sourceIframe);
+      } else {
+        TRACE('PLANTUML_CTX_MENU_ACTION: unknown action ' + data.action);
+      }
+      return;
+    }
 
     // Handle bitmap-copy responses: forward the blob (or error) to the
     // matching pending request created by the bitmap-button click.
@@ -812,6 +962,23 @@
         pending.resolve(data.blob);
       } else {
         pending.reject(new Error(data.error || 'Unknown bitmap copy error'));
+      }
+      return;
+    }
+
+    // Handle SVG-copy responses: forward the SVG string (or error) to the
+    // matching pending request created by copySvgFromIframe().
+    if (data.type === 'PLANTUML_SVG_RESULT' || data.type === 'PLANTUML_SVG_ERROR') {
+      const pending = pendingSvgRequests.get(data.requestId);
+      if (!pending) {
+        TRACE('no pending svg request for requestId=' + data.requestId);
+        return;
+      }
+      pendingSvgRequests.delete(data.requestId);
+      if (data.type === 'PLANTUML_SVG_RESULT' && typeof data.svg === 'string') {
+        pending.resolve(data.svg);
+      } else {
+        pending.reject(new Error(data.error || 'Unknown svg copy error'));
       }
       return;
     }
