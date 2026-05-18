@@ -1,0 +1,106 @@
+name: Release extension packages
+
+# Triggered when a version tag is pushed (e.g. `git tag v0.2.4 && git push --tags`).
+# The job rebuilds Chrome/ and Firefox/ from template/, packages both ZIPs, and
+# publishes a GitHub Release with the two archives as assets.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write    # required to create a release and upload assets
+
+jobs:
+  build-and-release:
+    name: Build and publish release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # The tag is the source of truth. We strip the leading `v` and use the
+      # remainder as the expected manifest version.
+      - name: Extract version from tag
+        id: tag
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          echo "tag=${tag}"          >> "$GITHUB_OUTPUT"
+          echo "version=${version}"  >> "$GITHUB_OUTPUT"
+          echo "Tag: ${tag}  ->  version: ${version}"
+
+      # Regenerate Chrome/ and Firefox/ from template/ so the published ZIPs
+      # always reflect the template, regardless of what's committed under
+      # Chrome/ and Firefox/ at HEAD. We do this BEFORE the version check
+      # because template/manifest.json is a preprocessed template (it
+      # contains #if CHROME / #if FIREFOX directives) and isn't valid JSON
+      # on its own -- only the generated Chrome/manifest.json is.
+      - name: Generate Chrome/ and Firefox/ from template/
+        run: python template.py
+
+      # Safety net: refuse to build if the manifest version doesn't match the
+      # tag. Without this, you could push `v0.2.5` while manifest.json is still
+      # at 0.2.4 and end up with ZIPs named `...-0.2.4.zip` under a `v0.2.5`
+      # release, which is confusing for everyone.
+      - name: Verify manifest version matches tag
+        run: |
+          set -e
+          manifest_version=$(python -c "import json; print(json.load(open('Chrome/manifest.json'))['version'])")
+          expected="${{ steps.tag.outputs.version }}"
+          echo "Chrome/manifest.json version: ${manifest_version}"
+          echo "tag version:                  ${expected}"
+          if [ "${manifest_version}" != "${expected}" ]; then
+            echo "::error::Version mismatch -- update template/manifest.json to ${expected} before tagging."
+            exit 1
+          fi
+
+      - name: Build Chrome ZIP
+        run: python build_zip_chrome.py
+
+      - name: Build Firefox ZIP
+        run: python build_zip_firefox.py
+
+      # Pull the matching section out of HISTORY.md so the release page shows
+      # the same changelog entry the user already wrote. Falls back to a
+      # generic note if the section is missing.
+      - name: Extract release notes from HISTORY.md
+        id: notes
+        run: |
+          python <<'PY' > release_notes.md
+          import re, pathlib, sys
+          version = "${{ steps.tag.outputs.version }}"
+          text = pathlib.Path("HISTORY.md").read_text(encoding="utf-8")
+          # Match `## <version>` up to (but excluding) the next `## ` heading
+          # or end-of-file. Anchored at start-of-line, multiline mode.
+          pattern = rf"^##\s+{re.escape(version)}\s*\n(.*?)(?=^##\s|\Z)"
+          m = re.search(pattern, text, flags=re.MULTILINE | re.DOTALL)
+          if m:
+              sys.stdout.write(m.group(1).strip() + "\n")
+          else:
+              sys.stdout.write(f"Release {version}.\n")
+          PY
+          echo "----- release_notes.md -----"
+          cat release_notes.md
+          echo "----------------------------"
+
+      # `gh` is preinstalled on GitHub-hosted runners and uses GITHUB_TOKEN
+      # automatically. Both ZIP filenames are derived from the manifest
+      # version we just verified.
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${{ steps.tag.outputs.version }}"
+          tag="${{ steps.tag.outputs.tag }}"
+          gh release create "${tag}" \
+            --title "${tag}" \
+            --notes-file release_notes.md \
+            "plantuml-for-github-chrome-${version}.zip" \
+            "plantuml-for-github-firefox-${version}.zip"
