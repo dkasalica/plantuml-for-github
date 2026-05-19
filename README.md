@@ -7,6 +7,7 @@ A Chrome extension that renders ` ```plantuml ` code blocks directly on GitHub p
 ## Installation
 
 - From the [Chrome Web Store](https://chromewebstore.google.com/detail/plantuml-for-github/lbokhidfopkdehkmlmpaabacljoediic)
+- From the [Firefox Add-ons Catalog](https://addons.mozilla.org/en-US/firefox/addon/plantuml-for-github/)
 
 
 ## Live demo
@@ -79,12 +80,12 @@ Save it, then reload the page. The diagram should appear.
 ## Roadmap
 
 - [x] MVP: detect and render `plantuml` blocks
-- [ ] Firefox support (Manifest V3 is now supported in Firefox)
-- [ ] "Copy SVG" / "Copy source" buttons
+- [X] Firefox support (Manifest V3 is now supported in Firefox)
+- [X] "Copy SVG" / "Copy source" buttons
 - [x] Theme matching (light/dark) — follows GitHub's color mode
 - [x] Support `puml` and `wsd` language aliases
 - [ ] Options page (toggle, performance settings)
-- [ ] Chrome Web Store publication
+- [X] Chrome Web Store publication
 
 ## Why this extension exists
 
